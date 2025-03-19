@@ -1,75 +1,73 @@
 import streamlit as st
 import re
+import pandas as pd
+from datetime import timedelta
 
-st.title('Calculadora de Tempo Parado no Futebol ⚽')
+def converter_timestamp_para_segundos(timestamp):
+    # Implementação conforme código anterior
+    pass
 
-# Seleção de idioma
-language = st.radio('Selecione o idioma dos eventos:', ['Português', 'Inglês'])
+def é_evento_de_paralisação(evento):
+    # Implementação conforme código anterior
+    pass
 
-# Área para colar os eventos
-events_input = st.text_area('Cole os eventos da partida aqui:', height=300, 
-                           help='Exemplo:\n10\'34\'\'Dangerous Attack...\n09\'13\'\'Substitution...')
-
-if st.button('Calcular Tempo Parado'):
-    events = []
-    pattern = re.compile(r"^(\d+)'(\d+)''\s*(.*)")
+def processar_paralisações(eventos):
+    # Processa eventos para calcular tempo de paralisação
+    em_paralisação = False
+    tempo_inicio_paralisação = 0
+    tempo_total_paralisação = 0
     
-    # Palavras-chave para tempo parado
-    if language == 'Inglês':
-        keywords = ['substitution', 'free kick', 'throw-in']
-    else:
-        keywords = ['substituição', 'livre', 'lançamento lateral']
-    
-    # Processamento dos eventos
-    for line in events_input.split('\n'):
-        line = line.strip()
-        if not line:
+    for i, evento in enumerate(eventos):
+        partes = evento.split("''", 1)
+        if len(partes) < 2:
             continue
             
-        match = pattern.match(line)
-        if not match:
-            st.error(f'Formato inválido: "{line}"')
-            continue
+        timestamp = partes[0] + "''"
+        descrição = partes[1].strip()
+        
+        tempo_atual = converter_timestamp_para_segundos(timestamp)
+        
+        if é_evento_de_paralisação(descrição):
+            if not em_paralisação:
+                em_paralisação = True
+                tempo_inicio_paralisação = tempo_atual
+        else:
+            if em_paralisação:
+                em_paralisação = False
+                tempo_paralisação = tempo_atual - tempo_inicio_paralisação
+                tempo_total_paralisação += tempo_paralisação
+    
+    return tempo_total_paralisação
+
+def main():
+    st.title("Calculadora de Tempo de Paralisação em Jogos de Futebol")
+    
+    idioma = st.radio("Selecione o idioma dos eventos:", ["Português", "Inglês"])
+    
+    eventos_texto = st.text_area("Cole aqui os eventos da partida:", height=400)
+    
+    if st.button("Calcular Tempo de Paralisação"):
+        if eventos_texto:
+            eventos = eventos_texto.strip().split("\n")
             
-        minutos = int(match.group(1))
-        segundos = int(match.group(2))
-        total_segundos = minutos * 60 + segundos
-        descricao = match.group(3).lower()
-        
-        # Verifica se é um evento de tempo parado
-        is_parado = any(descricao.startswith(palavra.lower()) for palavra in keywords)
-        
-        # Determina o tempo
-        tempo = 'primeiro' if total_segundos <= 2700 else 'segundo'  # 2700s = 45min
-        
-        events.append({
-            'tempo': tempo,
-            'segundos': total_segundos,
-            'parado': is_parado
-        })
-    
-    # Cálculo do tempo parado
-    resultados = {'primeiro': 0, 'segundo': 0}
-    
-    for tempo in ['primeiro', 'segundo']:
-        eventos_tempo = sorted([e for e in events if e['tempo'] == tempo], 
-                             key=lambda x: x['segundos'])
-        
-        for i in range(len(eventos_tempo)-1):
-            if eventos_tempo[i]['parado']:
-                diff = eventos_tempo[i+1]['segundos'] - eventos_tempo[i]['segundos']
-                resultados[tempo] += diff
-    
-    # Exibição dos resultados
-    st.subheader('Resultados:')
-    
-    for tempo in ['primeiro', 'segundo']:
-        total = resultados[tempo]
-        minutos = total // 60
-        segundos = total % 60
-        
-        st.metric(
-            label=f'Tempo {tempo} parado',
-            value=f'{minutos:02d}:{segundos:02d}',
-            help='Tempo acumulado devido a substituições, faltas, laterais, etc.'
-        )
+            tempo_paralisação_1t, tempo_paralisação_2t = calcular_tempo_paralisação(eventos)
+            
+            st.success("Cálculo concluído!")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.metric("Tempo de Paralisação - 1º Tempo", 
+                         str(timedelta(seconds=tempo_paralisação_1t)))
+            
+            with col2:
+                st.metric("Tempo de Paralisação - 2º Tempo", 
+                         str(timedelta(seconds=tempo_paralisação_2t)))
+            
+            st.metric("Tempo Total de Paralisação", 
+                     str(timedelta(seconds=tempo_paralisação_1t + tempo_paralisação_2t)))
+        else:
+            st.error("Por favor, insira os eventos da partida.")
+
+if __name__ == "__main__":
+    main()
