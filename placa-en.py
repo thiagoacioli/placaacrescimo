@@ -69,5 +69,37 @@ def main():
         else:
             st.error("Por favor, insira os eventos da partida.")
 
+def é_evento_de_paralisação(evento, idioma="Inglês"):
+    eventos_paralisação = {
+        "Inglês": [
+            "Substitution", "Yellow Card", "Red Card", 
+            "Free Kick", "Goal Kick", "Corner",
+            "Throw In", "Kick-off"
+        ],
+        "Português": [
+            "Substituição", "Cartão Amarelo", "Cartão Vermelho",
+            "Tiro Livre", "Tiro de Meta", "Escanteio",
+            "Lateral", "Início de Jogo"
+        ]
+    }
+    
+    lista_eventos = eventos_paralisação.get(idioma, eventos_paralisação["Inglês"])
+    
+    for tipo in lista_eventos:
+        if tipo in evento:
+            return True
+    return False
+def mostrar_resultados_gráficos(tempo_1t, tempo_2t):
+    tempos = [tempo_1t, tempo_2t]
+    labels = ["1º Tempo", "2º Tempo"]
+    
+    fig, ax = plt.subplots()
+    ax.bar(labels, tempos)
+    ax.set_ylabel("Tempo (segundos)")
+    ax.set_title("Tempo de Paralisação por Período")
+    
+    st.pyplot(fig)
+
+
 if __name__ == "__main__":
     main()
