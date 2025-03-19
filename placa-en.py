@@ -11,15 +11,16 @@ def extrair_eventos(texto_eventos):
     linhas = texto_eventos.strip().split('\n')
     
     # Padrão para capturar o tempo em formatos como "52'32''" ou "45' + 0'55''"
-    padrao_tempo = re.compile(r'(\d+)\'(?:\s*\+\s*)?(\d+)?\'?(?:(\d+)\'\')?(.+)')
+    padrao_tempo = re.compile(r'(\d+)\'(?:\s*\+\s*(\d+)\')?(?:(\d+)\'\')?(.+)')
     
     for linha in linhas:
-        if not linha.strip() or linha.strip() == "Half Time" or linha.strip() == "1st Half Kick-off":
+        linha = linha.strip()
+        if not linha or linha == "Half Time" or linha == "1st Half Kick-off":
             # Evento especial para marcar o intervalo
-            if linha.strip() == "Half Time":
-                eventos.append(("Half Time", None, None, "Half Time"))
+            if linha == "Half Time":
+                eventos.append(("Half Time", None, None, "Half Time", float('inf')))
             continue
-            
+        
         match = padrao_tempo.match(linha)
         if match:
             minuto_base = int(match.group(1))
@@ -33,7 +34,7 @@ def extrair_eventos(texto_eventos):
             eventos.append((minuto_base, acrescimo, segundo, descricao, tempo_total))
     
     # Ordenar eventos por tempo
-    eventos.sort(key=lambda x: x[4] if isinstance(x[4], int) else 0)
+    eventos.sort(key=lambda x: x[4] if isinstance(x[4], (int, float)) else 0)
     
     return eventos
 
@@ -57,6 +58,7 @@ def identificar_paralisacoes(eventos):
     inicio_paralisacao = None
     
     for i, evento in enumerate(eventos):
+        # Pular o evento de Half Time
         if isinstance(evento[0], str) and evento[0] == "Half Time":
             continue
             
@@ -66,9 +68,9 @@ def identificar_paralisacoes(eventos):
         e_paralisacao = any(palavra in descricao for palavra in palavras_paralisacao)
         e_continuacao = any(palavra in descricao for palavra in eventos_sem_paralisacao)
         
-        if e_paralisacao and not inicio_paralisacao:
+        if e_paralisacao and inicio_paralisacao is None:
             inicio_paralisacao = evento
-        elif e_continuacao and inicio_paralisacao:
+        elif e_continuacao and inicio_paralisacao is not None:
             # Calcular duração da paralisação
             duracao = tempo_total - inicio_paralisacao[4]
             
@@ -100,7 +102,14 @@ def calcular_tempo_paralisacao(paralisacoes):
         inicio, fim, duracao_minutos, duracao_segundos = paralisacao
         
         # Verificar se a paralisação ocorreu no primeiro ou segundo tempo
-        if inicio[0] < 45 or (inicio[0] == 45 and inicio[1] > 0):
+        # O "Half Time" é um marcador especial
+        if isinstance(inicio[0], str) and inicio[0] == "Half Time":
+            continue
+            
+        # Verificar primeiro ou segundo tempo
+        minuto_base = inicio[0]
+        
+        if minuto_base <= 45:
             primeiro_tempo.append((duracao_minutos, duracao_segundos))
         else:
             segundo_tempo.append((duracao_minutos, duracao_segundos))
@@ -126,7 +135,10 @@ def formatar_evento(evento):
     if acrescimo > 0:
         return f"{minuto_base}' + {acrescimo}'{segundo}'' {descricao}"
     else:
-        return f"{minuto_base}'{segundo}'' {descricao}"
+        if segundo > 0:
+            return f"{minuto_base}'{segundo}'' {descricao}"
+        else:
+            return f"{minuto_base}' {descricao}"
 
 def main():
     st.title("Calculadora de Tempo de Paralisação em Partidas")
@@ -148,54 +160,59 @@ def main():
             eventos = extrair_eventos(texto_eventos)
             
             if eventos:
-                # Identificar paralisações
-                paralisacoes = identificar_paralisacoes(eventos)
-                
-                # Calcular tempo de paralisação
-                tempo_primeiro, tempo_segundo, paralisacoes_primeiro, paralisacoes_segundo = calcular_tempo_paralisacao(paralisacoes)
-                
-                # Exibir resultados
-                st.subheader("Resumo das Paralisações")
-                
-                # Primeiro tempo
-                st.markdown("### Primeiro Tempo")
-                if paralisacoes_primeiro:
-                    for i, (minutos, segundos) in enumerate(paralisacoes_primeiro, 1):
-                        st.write(f"Paralisação {i}: {minutos} min e {segundos} seg")
-                    st.success(f"Tempo total de paralisação no primeiro tempo: {formatar_tempo(tempo_primeiro)}")
-                else:
-                    st.info("Nenhuma paralisação identificada no primeiro tempo.")
-                
-                # Segundo tempo
-                st.markdown("### Segundo Tempo")
-                if paralisacoes_segundo:
-                    for i, (minutos, segundos) in enumerate(paralisacoes_segundo, 1):
-                        st.write(f"Paralisação {i}: {minutos} min e {segundos} seg")
-                    st.success(f"Tempo total de paralisação no segundo tempo: {formatar_tempo(tempo_segundo)}")
-                else:
-                    st.info("Nenhuma paralisação identificada no segundo tempo.")
-                
-                # Total geral
-                tempo_total = tempo_primeiro + tempo_segundo
-                st.subheader(f"Tempo total de paralisação na partida: {formatar_tempo(tempo_total)}")
-                
-                # Opção para ver detalhes das paralisações
-                if st.checkbox("Ver detalhes das paralisações"):
-                    st.subheader("Detalhes das Paralisações")
-                    for i, (inicio, fim, duracao_minutos, duracao_segundos) in enumerate(paralisacoes, 1):
-                        st.write(f"Paralisação {i}: {duracao_minutos} min e {duracao_segundos} seg")
-                        st.write(f"- Início: {formatar_evento(inicio)}")
-                        st.write(f"- Fim: {formatar_evento(fim)}")
-                        st.write("---")
-                
-                # Opção para ver todos os eventos
-                if st.checkbox("Ver todos os eventos"):
-                    st.subheader("Todos os Eventos")
-                    for evento in eventos:
-                        if isinstance(evento[0], str) and evento[0] == "Half Time":
-                            st.write("Half Time")
-                        else:
-                            st.write(formatar_evento(evento))
+                try:
+                    # Identificar paralisações
+                    paralisacoes = identificar_paralisacoes(eventos)
+                    
+                    # Calcular tempo de paralisação
+                    tempo_primeiro, tempo_segundo, paralisacoes_primeiro, paralisacoes_segundo = calcular_tempo_paralisacao(paralisacoes)
+                    
+                    # Exibir resultados
+                    st.subheader("Resumo das Paralisações")
+                    
+                    # Primeiro tempo
+                    st.markdown("### Primeiro Tempo")
+                    if paralisacoes_primeiro:
+                        for i, (minutos, segundos) in enumerate(paralisacoes_primeiro, 1):
+                            st.write(f"Paralisação {i}: {minutos} min e {segundos} seg")
+                        st.success(f"Tempo total de paralisação no primeiro tempo: {formatar_tempo(tempo_primeiro)}")
+                    else:
+                        st.info("Nenhuma paralisação identificada no primeiro tempo.")
+                    
+                    # Segundo tempo
+                    st.markdown("### Segundo Tempo")
+                    if paralisacoes_segundo:
+                        for i, (minutos, segundos) in enumerate(paralisacoes_segundo, 1):
+                            st.write(f"Paralisação {i}: {minutos} min e {segundos} seg")
+                        st.success(f"Tempo total de paralisação no segundo tempo: {formatar_tempo(tempo_segundo)}")
+                    else:
+                        st.info("Nenhuma paralisação identificada no segundo tempo.")
+                    
+                    # Total geral
+                    tempo_total = tempo_primeiro + tempo_segundo
+                    st.subheader(f"Tempo total de paralisação na partida: {formatar_tempo(tempo_total)}")
+                    
+                    # Opção para ver detalhes das paralisações
+                    if st.checkbox("Ver detalhes das paralisações"):
+                        st.subheader("Detalhes das Paralisações")
+                        for i, (inicio, fim, duracao_minutos, duracao_segundos) in enumerate(paralisacoes, 1):
+                            st.write(f"Paralisação {i}: {duracao_minutos} min e {duracao_segundos} seg")
+                            st.write(f"- Início: {formatar_evento(inicio)}")
+                            st.write(f"- Fim: {formatar_evento(fim)}")
+                            st.write("---")
+                    
+                    # Opção para ver todos os eventos
+                    if st.checkbox("Ver todos os eventos"):
+                        st.subheader("Todos os Eventos")
+                        for evento in eventos:
+                            if isinstance(evento[0], str) and evento[0] == "Half Time":
+                                st.write("Half Time")
+                            else:
+                                st.write(formatar_evento(evento))
+                                
+                except Exception as e:
+                    st.error(f"Ocorreu um erro ao processar os eventos: {str(e)}")
+                    st.info("Por favor, verifique o formato dos eventos ou entre em contato com o suporte.")
             else:
                 st.error("Não foi possível identificar eventos no formato correto. Por favor, verifique o formato dos eventos inseridos.")
         else:
