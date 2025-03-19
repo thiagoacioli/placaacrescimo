@@ -1,133 +1,146 @@
 import streamlit as st
 import re
-from datetime import datetime, timedelta
+import pandas as pd
 
-def extract_events(text, language="pt"):
-    # Definindo padrões de eventos para português e inglês
-    if language == "pt":
-        # Padrão para detectar eventos em português
-        pattern = r"(\d+:\d+)\s+(.*?)(?=\n\d+:\d+|\Z)"
-        priority_events = ["livre", "falta", "substituição", "substituicao", "cartão", "cartao", "lesão", "lesao"]
-    else:
-        # Padrão para detectar eventos em inglês
-        pattern = r"(\d+:\d+)\s+(.*?)(?=\n\d+:\d+|\Z)"
-        priority_events = ["free kick", "foul", "substitution", "card", "injury"]
-    
+def extract_events(text, language='pt'):
+    """Extrai eventos do texto fornecido, identificando tempos e tipos de eventos."""
     events = []
     
-    # Encontrar todos os eventos no texto
-    matches = re.findall(pattern, text, re.DOTALL | re.MULTILINE)
+    # Definir padrões de expressão regular para encontrar eventos
+    if language == 'pt':
+        # Padrão para português: tempo + tipo de evento
+        pattern = r'(\d+)[\'|\′]?\s+([\w\s]+)'
+        
+        # Palavras-chave para eventos importantes em português
+        priority_keywords = {
+            'alta': ['livre', 'falta', 'substituição', 'substituicao', 'subst', 'lesão', 'lesao', 'var', 'revisão', 'revisao'],
+            'média': ['cartão', 'cartao', 'amarelo', 'vermelho', 'escanteio', 'tiro de meta'],
+            'baixa': ['início', 'inicio', 'fim', 'gol', 'bola rolando']
+        }
+    else:
+        # Padrão para inglês: tempo + tipo de evento
+        pattern = r'(\d+)[\'|\′]?\s+([\w\s]+)'
+        
+        # Palavras-chave para eventos importantes em inglês
+        priority_keywords = {
+            'alta': ['free kick', 'foul', 'substitution', 'sub', 'injury', 'var', 'review'],
+            'média': ['card', 'yellow', 'red', 'corner', 'goal kick'],
+            'baixa': ['start', 'end', 'goal', 'ball in play']
+        }
     
-    for time_str, description in matches:
-        # Converter o tempo para objeto datetime para facilitar cálculos
-        time_obj = datetime.strptime(time_str, "%M:%S")
+    # Encontrar todos os matches no texto
+    matches = re.findall(pattern, text, re.IGNORECASE)
+    
+    for match in matches:
+        time = int(match[0])
+        event_type = match[1].strip()
         
-        # Verificar se é um evento prioritário
-        is_priority = any(event.lower() in description.lower() for event in priority_events)
-        
-        # Estimar tempo de paralisação com base no tipo de evento
-        stoppage_time = 0
-        if is_priority:
-            if any(event in description.lower() for event in ["substituição", "substituicao", "substitution"]):
-                stoppage_time = 30  # 30 segundos para substituições
-            elif any(event in description.lower() for event in ["livre", "falta", "free kick", "foul"]):
-                stoppage_time = 45  # 45 segundos para faltas
-            elif any(event in description.lower() for event in ["lesão", "lesao", "injury"]):
-                stoppage_time = 60  # 60 segundos para lesões
-            elif any(event in description.lower() for event in ["cartão", "cartao", "card"]):
-                stoppage_time = 20  # 20 segundos para cartões
-            else:
-                stoppage_time = 15  # Tempo padrão para outros eventos prioritários
-        
-        minute = time_obj.minute + time_obj.second / 60
-        half = 1 if minute <= 45 else 2
+        # Determinar prioridade do evento
+        priority = 'baixa'
+        for p, keywords in priority_keywords.items():
+            if any(keyword in event_type.lower() for keyword in keywords):
+                priority = p
+                break
         
         events.append({
-            "time": time_str,
-            "description": description.strip(),
-            "is_priority": is_priority,
-            "stoppage_time": stoppage_time,
-            "half": half
+            'tempo': time,
+            'evento': event_type,
+            'prioridade': priority
         })
     
     return events
 
-def calculate_stoppage_time(events):
-    first_half = sum(event["stoppage_time"] for event in events if event["half"] == 1)
-    second_half = sum(event["stoppage_time"] for event in events if event["half"] == 2)
+def calculate_stoppage_time(events, half_duration=45):
+    """Calcula o tempo de paralisação com base nos eventos."""
+    if not events:
+        return 0
     
-    # Converter segundos para minutos e segundos
-    first_half_min, first_half_sec = divmod(first_half, 60)
-    second_half_min, second_half_sec = divmod(second_half, 60)
-    total_min, total_sec = divmod(first_half + second_half, 60)
+    # Ordenar eventos por tempo
+    events_sorted = sorted(events, key=lambda x: x['tempo'])
     
-    return {
-        "first_half": f"{int(first_half_min)}:{int(first_half_sec):02d}",
-        "second_half": f"{int(second_half_min)}:{int(second_half_sec):02d}",
-        "total": f"{int(total_min)}:{int(total_sec):02d}"
+    # Calcular tempo médio de paralisação por tipo de prioridade
+    stoppages = {
+        'alta': 60,  # Em segundos (1 minuto para eventos de alta prioridade)
+        'média': 30,  # Em segundos (30 segundos para eventos de média prioridade)
+        'baixa': 15   # Em segundos (15 segundos para eventos de baixa prioridade)
     }
+    
+    total_stoppage_seconds = 0
+    for event in events_sorted:
+        if event['tempo'] <= half_duration:
+            total_stoppage_seconds += stoppages[event['prioridade']]
+    
+    # Converter para minutos
+    return total_stoppage_seconds / 60
 
 def main():
     st.title("⚽ Calculadora de Tempo de Paralisação")
     
     # Seleção de idioma
-    language = st.radio(
-        "Selecione o idioma dos eventos / Select language for events:",
-        ("Português", "English")
-    )
+    language = st.radio("Selecione o idioma dos eventos:", ["Português", "English"])
+    lang_code = 'pt' if language == "Português" else 'en'
     
-    lang_code = "pt" if language == "Português" else "en"
+    # Área de texto para entrada de eventos
+    if lang_code == 'pt':
+        st.subheader("Eventos da Partida")
+        event_text = st.text_area(
+            "Cole aqui os eventos da partida no formato: '15' Falta para o time A, '23' Substituição time B, etc.", 
+            height=200
+        )
+    else:
+        st.subheader("Match Events")
+        event_text = st.text_area(
+            "Paste the match events here in the format: '15' Free kick for team A, '23' Substitution team B, etc.", 
+            height=200
+        )
     
-    # Área de entrada de texto
-    input_label = "Cole os eventos da partida aqui:" if lang_code == "pt" else "Paste match events here:"
-    events_text = st.text_area(input_label, height=300)
-    
-    # Exemplos para ajudar o usuário
-    with st.expander("Ver exemplos de formato / See format examples"):
-        if lang_code == "pt":
-            st.markdown("""
-            ```
-            05:20 Falta de jogador A
-            12:45 Substituição do jogador B pelo jogador C
-            23:10 Cartão amarelo para jogador D
-            31:05 Cobrança de escanteio
-            44:30 Lesão do jogador E
-            47:20 Livre direto para equipe local
-            ```
-            """)
-        else:
-            st.markdown("""
-            ```
-            05:20 Foul by player A
-            12:45 Substitution of player B for player C
-            23:10 Yellow card for player D
-            31:05 Corner kick
-            44:30 Injury of player E
-            47:20 Free kick for home team
-            ```
-            """)
-    
-    if st.button("Calcular Tempo de Paralisação" if lang_code == "pt" else "Calculate Stoppage Time"):
-        if events_text:
-            events = extract_events(events_text, lang_code)
-            stoppage_times = calculate_stoppage_time(events)
+    # Cálculo do tempo de paralisação
+    if st.button("Calcular Tempo de Paralisação" if lang_code == 'pt' else "Calculate Stoppage Time"):
+        if event_text:
+            events = extract_events(event_text, lang_code)
+            
+            # Separar eventos por tempo (primeiro tempo e segundo tempo)
+            first_half_events = [e for e in events if e['tempo'] <= 45]
+            second_half_events = [e for e in events if e['tempo'] > 45]
+            
+            # Calcular tempo de paralisação para cada tempo
+            first_half_stoppage = calculate_stoppage_time(first_half_events)
+            second_half_stoppage = calculate_stoppage_time(second_half_events)
+            total_stoppage = first_half_stoppage + second_half_stoppage
             
             # Exibir resultados
-            st.subheader("Resultados" if lang_code == "pt" else "Results")
-            col1, col2, col3 = st.columns(3)
-            col1.metric("1º Tempo" if lang_code == "pt" else "1st Half", stoppage_times["first_half"])
-            col2.metric("2º Tempo" if lang_code == "pt" else "2nd Half", stoppage_times["second_half"])
-            col3.metric("Total", stoppage_times["total"])
+            st.subheader("Resultados:" if lang_code == 'pt' else "Results:")
             
-            # Exibir eventos detectados
-            st.subheader("Eventos detectados" if lang_code == "pt" else "Detected Events")
-            for event in events:
-                if event["is_priority"]:
-                    st.markdown(f"⏱️ **{event['time']}** - {event['description']} - *+{event['stoppage_time']} segundos*")
-                else:
-                    st.text(f"{event['time']} - {event['description']}")
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("1º Tempo" if lang_code == 'pt' else "1st Half", f"{first_half_stoppage:.1f} min")
+            with col2:
+                st.metric("2º Tempo" if lang_code == 'pt' else "2nd Half", f"{second_half_stoppage:.1f} min")
+            with col3:
+                st.metric("Total" if lang_code == 'pt' else "Total", f"{total_stoppage:.1f} min")
+            
+            # Mostrar eventos em uma tabela
+            st.subheader("Detalhes dos Eventos:" if lang_code == 'pt' else "Event Details:")
+            
+            df = pd.DataFrame(events)
+            df.columns = ['Tempo', 'Evento', 'Prioridade'] if lang_code == 'pt' else ['Time', 'Event', 'Priority']
+            
+            # Marcar eventos de alta prioridade
+            def highlight_priority(row):
+                priority = row['Prioridade'] if lang_code == 'pt' else row['Priority']
+                if priority == 'alta':
+                    return ['background-color: #ffcccc'] * len(row)
+                return [''] * len(row)
+            
+            styled_df = df.style.apply(highlight_priority, axis=1)
+            st.dataframe(styled_df)
+            
+            # Resumo por tipo de evento
+            st.subheader("Resumo por Prioridade:" if lang_code == 'pt' else "Summary by Priority:")
+            priority_counts = df['Prioridade'].value_counts() if lang_code == 'pt' else df['Priority'].value_counts()
+            st.bar_chart(priority_counts)
         else:
-            st.warning("Por favor, insira os eventos da partida" if lang_code == "pt" else "Please input match events")
+            st.warning("Por favor, insira os eventos da partida." if lang_code == 'pt' else "Please enter match events.")
 
 if __name__ == "__main__":
     main()
