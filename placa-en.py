@@ -2,221 +2,131 @@ import streamlit as st
 import re
 from datetime import datetime, timedelta
 
-def extrair_eventos(texto_eventos):
-    """
-    Extrai eventos do texto inserido no formato específico do radar.
-    Suporta formatos como "52'32''Clearance by Netherlands U19" ou "45' + 0'55''Dangerous Attack by Netherlands U19"
-    """
-    eventos = []
-    linhas = texto_eventos.strip().split('\n')
-    
-    # Padrão para capturar o tempo em formatos como "52'32''" ou "45' + 0'55''"
-    padrao_tempo = re.compile(r'(\d+)\'(?:\s*\+\s*(\d+)\')?(?:(\d+)\'\')?(.+)')
-    
-    for linha in linhas:
-        linha = linha.strip()
-        if not linha or linha == "Half Time" or linha == "1st Half Kick-off":
-            # Evento especial para marcar o intervalo
-            if linha == "Half Time":
-                eventos.append(("Half Time", None, None, "Half Time", float('inf')))
-            continue
-        
-        match = padrao_tempo.match(linha)
-        if match:
-            minuto_base = int(match.group(1))
-            acrescimo = int(match.group(2)) if match.group(2) else 0
-            segundo = int(match.group(3)) if match.group(3) else 0
-            descricao = match.group(4).strip()
-            
-            # Calcular o tempo total em segundos para facilitar a ordenação
-            tempo_total = (minuto_base + acrescimo) * 60 + segundo
-            
-            eventos.append((minuto_base, acrescimo, segundo, descricao, tempo_total))
-    
-    # Ordenar eventos por tempo
-    eventos.sort(key=lambda x: x[4] if isinstance(x[4], (int, float)) else 0)
-    
-    return eventos
+def parse_time(time_str):
+    """Converte string de tempo (MM:SS) para segundos."""
+    try:
+        minutes, seconds = map(int, time_str.split(':'))
+        return minutes * 60 + seconds
+    except:
+        return None
 
-def identificar_paralisacoes(eventos):
-    """
-    Identifica eventos de paralisação com base em palavras-chave.
-    """
-    # Palavras-chave que indicam paralisação
-    palavras_paralisacao = [
-        'Free Kick', 'Corner', 'Goal Kick', 'Throw In', 'Substitution', 
-        'Yellow Card', 'Red Card', 'Goal', 'Kick-off', 'Shot On Target',
-        'Shot Off Target', 'VAR', 'Treatment', 'Injury', 'Offside'
-    ]
+def extract_events(text, language="pt"):
+    """Extrai eventos relevantes do texto."""
+    events = []
     
-    # Eventos que normalmente não causam paralisação
-    eventos_sem_paralisacao = [
-        'Attack', 'Dangerous Attack', 'Clearance', 'Blocked Shot'
-    ]
-    
-    paralisacoes = []
-    inicio_paralisacao = None
-    
-    for i, evento in enumerate(eventos):
-        # Pular o evento de Half Time
-        if isinstance(evento[0], str) and evento[0] == "Half Time":
-            continue
-            
-        minuto_base, acrescimo, segundo, descricao, tempo_total = evento
-        
-        # Verifica se é um evento de paralisação
-        e_paralisacao = any(palavra in descricao for palavra in palavras_paralisacao)
-        e_continuacao = any(palavra in descricao for palavra in eventos_sem_paralisacao)
-        
-        if e_paralisacao and inicio_paralisacao is None:
-            inicio_paralisacao = evento
-        elif e_continuacao and inicio_paralisacao is not None:
-            # Calcular duração da paralisação
-            duracao = tempo_total - inicio_paralisacao[4]
-            
-            # Converter duração para minutos e segundos
-            duracao_minutos = duracao // 60
-            duracao_segundos = duracao % 60
-            
-            # Só registrar paralisações que duraram pelo menos 5 segundos
-            if duracao >= 5:
-                paralisacoes.append((
-                    inicio_paralisacao,
-                    evento,
-                    duracao_minutos,
-                    duracao_segundos
-                ))
-            
-            inicio_paralisacao = None
-    
-    return paralisacoes
-
-def calcular_tempo_paralisacao(paralisacoes):
-    """
-    Calcula o tempo total de paralisação no primeiro e segundo tempo.
-    """
-    primeiro_tempo = []
-    segundo_tempo = []
-    
-    for paralisacao in paralisacoes:
-        inicio, fim, duracao_minutos, duracao_segundos = paralisacao
-        
-        # Verificar se a paralisação ocorreu no primeiro ou segundo tempo
-        # O "Half Time" é um marcador especial
-        if isinstance(inicio[0], str) and inicio[0] == "Half Time":
-            continue
-            
-        # Verificar primeiro ou segundo tempo
-        minuto_base = inicio[0]
-        
-        if minuto_base <= 45:
-            primeiro_tempo.append((duracao_minutos, duracao_segundos))
-        else:
-            segundo_tempo.append((duracao_minutos, duracao_segundos))
-    
-    # Calcular o tempo total de paralisação em segundos
-    tempo_primeiro = sum(m * 60 + s for m, s in primeiro_tempo)
-    tempo_segundo = sum(m * 60 + s for m, s in segundo_tempo)
-    
-    return tempo_primeiro, tempo_segundo, primeiro_tempo, segundo_tempo
-
-def formatar_tempo(segundos):
-    """Formata o tempo em segundos para minutos e segundos."""
-    minutos = segundos // 60
-    segundos_restantes = segundos % 60
-    return f"{minutos} min e {segundos_restantes} seg"
-
-def formatar_evento(evento):
-    """Formata um evento para exibição."""
-    if isinstance(evento[0], str) and evento[0] == "Half Time":
-        return "Half Time"
-        
-    minuto_base, acrescimo, segundo, descricao, _ = evento
-    if acrescimo > 0:
-        return f"{minuto_base}' + {acrescimo}'{segundo}'' {descricao}"
+    # Definir padrões de regex baseados no idioma
+    if language == "pt":
+        # Padrão para português
+        time_pattern = r'(\d{1,2}:\d{2})'
+        foul_keywords = ['falta', 'tiro livre', 'free kick']
+        sub_keywords = ['substituição', 'substituicao', 'troca']
     else:
-        if segundo > 0:
-            return f"{minuto_base}'{segundo}'' {descricao}"
-        else:
-            return f"{minuto_base}' {descricao}"
+        # Padrão para inglês
+        time_pattern = r'(\d{1,2}:\d{2})'
+        foul_keywords = ['foul', 'free kick']
+        sub_keywords = ['substitution', 'sub']
+    
+    # Separar o texto em linhas
+    lines = text.lower().split('\n')
+    
+    for line in lines:
+        # Encontrar todos os horários na linha
+        times = re.findall(time_pattern, line)
+        
+        if times:
+            event_time = times[0]
+            event_seconds = parse_time(event_time)
+            
+            if event_seconds is not None:
+                # Verificar se é um evento prioritário
+                is_foul = any(keyword in line.lower() for keyword in foul_keywords)
+                is_sub = any(keyword in line.lower() for keyword in sub_keywords)
+                
+                # Calcular duração estimada
+                duration = 0
+                if is_foul:
+                    duration = 30  # 30 segundos para faltas
+                elif is_sub:
+                    duration = 45  # 45 segundos para substituições
+                
+                if duration > 0:
+                    events.append({
+                        'time': event_time,
+                        'seconds': event_seconds,
+                        'type': 'foul' if is_foul else 'substitution',
+                        'duration': duration,
+                        'text': line.strip()
+                    })
+    
+    return events
 
 def main():
-    st.title("Calculadora de Tempo de Paralisação em Partidas")
+    st.title("⚽ Calculadora de Tempo de Paralisação")
     
-    st.markdown("""
-    ## Instruções
-    1. Cole os eventos da partida no formato do radar no campo abaixo
-    2. O aplicativo reconhece formatos como:
-       - `52'32''Clearance by Netherlands U19`
-       - `45' + 0'55''Dangerous Attack by Netherlands U19`
-    3. O aplicativo identificará automaticamente os eventos de paralisação
-    """)
+    # Seleção de idioma
+    language = st.radio("Selecione o idioma dos eventos:", ["Português", "Inglês"], horizontal=True)
+    lang_code = "pt" if language == "Português" else "en"
     
-    # Campo para inserção dos eventos
-    texto_eventos = st.text_area("Cole os eventos da partida abaixo:", height=300)
+    # Área de texto para input dos eventos
+    st.subheader("Eventos da Partida")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.write("Primeiro Tempo")
+        first_half_events = st.text_area(
+            "Cole os eventos do primeiro tempo aqui",
+            height=300,
+            key="first_half"
+        )
+    
+    with col2:
+        st.write("Segundo Tempo")
+        second_half_events = st.text_area(
+            "Cole os eventos do segundo tempo aqui",
+            height=300,
+            key="second_half"
+        )
     
     if st.button("Calcular Tempo de Paralisação"):
-        if texto_eventos:
-            eventos = extrair_eventos(texto_eventos)
-            
-            if eventos:
-                try:
-                    # Identificar paralisações
-                    paralisacoes = identificar_paralisacoes(eventos)
-                    
-                    # Calcular tempo de paralisação
-                    tempo_primeiro, tempo_segundo, paralisacoes_primeiro, paralisacoes_segundo = calcular_tempo_paralisacao(paralisacoes)
-                    
-                    # Exibir resultados
-                    st.subheader("Resumo das Paralisações")
-                    
-                    # Primeiro tempo
-                    st.markdown("### Primeiro Tempo")
-                    if paralisacoes_primeiro:
-                        for i, (minutos, segundos) in enumerate(paralisacoes_primeiro, 1):
-                            st.write(f"Paralisação {i}: {minutos} min e {segundos} seg")
-                        st.success(f"Tempo total de paralisação no primeiro tempo: {formatar_tempo(tempo_primeiro)}")
-                    else:
-                        st.info("Nenhuma paralisação identificada no primeiro tempo.")
-                    
-                    # Segundo tempo
-                    st.markdown("### Segundo Tempo")
-                    if paralisacoes_segundo:
-                        for i, (minutos, segundos) in enumerate(paralisacoes_segundo, 1):
-                            st.write(f"Paralisação {i}: {minutos} min e {segundos} seg")
-                        st.success(f"Tempo total de paralisação no segundo tempo: {formatar_tempo(tempo_segundo)}")
-                    else:
-                        st.info("Nenhuma paralisação identificada no segundo tempo.")
-                    
-                    # Total geral
-                    tempo_total = tempo_primeiro + tempo_segundo
-                    st.subheader(f"Tempo total de paralisação na partida: {formatar_tempo(tempo_total)}")
-                    
-                    # Opção para ver detalhes das paralisações
-                    if st.checkbox("Ver detalhes das paralisações"):
-                        st.subheader("Detalhes das Paralisações")
-                        for i, (inicio, fim, duracao_minutos, duracao_segundos) in enumerate(paralisacoes, 1):
-                            st.write(f"Paralisação {i}: {duracao_minutos} min e {duracao_segundos} seg")
-                            st.write(f"- Início: {formatar_evento(inicio)}")
-                            st.write(f"- Fim: {formatar_evento(fim)}")
-                            st.write("---")
-                    
-                    # Opção para ver todos os eventos
-                    if st.checkbox("Ver todos os eventos"):
-                        st.subheader("Todos os Eventos")
-                        for evento in eventos:
-                            if isinstance(evento[0], str) and evento[0] == "Half Time":
-                                st.write("Half Time")
-                            else:
-                                st.write(formatar_evento(evento))
-                                
-                except Exception as e:
-                    st.error(f"Ocorreu um erro ao processar os eventos: {str(e)}")
-                    st.info("Por favor, verifique o formato dos eventos ou entre em contato com o suporte.")
-            else:
-                st.error("Não foi possível identificar eventos no formato correto. Por favor, verifique o formato dos eventos inseridos.")
+        # Extrair eventos
+        first_half = extract_events(first_half_events, lang_code)
+        second_half = extract_events(second_half_events, lang_code)
+        
+        # Calcular tempo total
+        first_half_stoppage = sum(event['duration'] for event in first_half)
+        second_half_stoppage = sum(event['duration'] for event in second_half)
+        total_stoppage = first_half_stoppage + second_half_stoppage
+        
+        # Exibir resultados
+        st.subheader("Resultado")
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.metric("Tempo de Paralisação (1º Tempo)", f"{first_half_stoppage // 60}:{first_half_stoppage % 60:02d}")
+        
+        with col2:
+            st.metric("Tempo de Paralisação (2º Tempo)", f"{second_half_stoppage // 60}:{second_half_stoppage % 60:02d}")
+        
+        with col3:
+            st.metric("Tempo Total de Paralisação", f"{total_stoppage // 60}:{total_stoppage % 60:02d}")
+        
+        # Exibir detalhes dos eventos
+        st.subheader("Detalhes dos Eventos")
+        
+        st.write("Primeiro Tempo:")
+        if first_half:
+            for event in first_half:
+                st.write(f"⏱️ {event['time']} - {event['text']} - Paralisação: {event['duration']} segundos")
         else:
-            st.warning("Por favor, insira os eventos da partida para calcular o tempo de paralisação.")
+            st.write("Nenhum evento de paralisação encontrado.")
+        
+        st.write("Segundo Tempo:")
+        if second_half:
+            for event in second_half:
+                st.write(f"⏱️ {event['time']} - {event['text']} - Paralisação: {event['duration']} segundos")
+        else:
+            st.write("Nenhum evento de paralisação encontrado.")
 
 if __name__ == "__main__":
     main()
